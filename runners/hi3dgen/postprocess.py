@@ -1,35 +1,39 @@
 # SPDX-License-Identifier: MIT
-"""生成したメッシュの後処理。**上流の手法に倣い、独自の判断を足さない。**
+"""Post-processing for the generated mesh. **Follow upstream; add no judgement of our own.**
 
-**Hi3DGen の上流（Stable3DGen）には後処理が無い。** TRELLIS から派生する際に
-`kaolin` / `nvdiffrast` / `flexicubes` への依存を外しており、`postprocess_mesh` に
-あたるものごと落としている（README が「商用利用できるように外した」と書いている）。
-メッシュ化は `skimage.measure` の marching cubes で、そのまま返している。
+**Hi3DGen's upstream (Stable3DGen) has no post-processing.** When it was derived
+from TRELLIS the dependencies on `kaolin`, `nvdiffrast` and `flexicubes` were
+removed, and the equivalent of `postprocess_mesh` went with them (the upstream
+README says they were dropped to make commercial use possible). Meshing is
+`skimage.measure` marching cubes, returned as-is.
 
-したがって **TRELLIS 側で行う「多視点ラスタライズ＋min-cut」はここでは行わない。**
-上流に無い処理を持ち込まないためである。
+**The multi-view rasterization plus min-cut that TRELLIS performs therefore does
+not happen here**, so that nothing absent from upstream is introduced.
 
-## 上流に無い処理（**2 つだけ。どちらも実測した欠陥への手当て**）
+## What is added on top of upstream (**exactly two, each fixing a measured defect**)
 
-### 1. 小さな穴を塞ぐ（`pymeshfix.fill_small_boundaries`）
+### 1. Fill small holes (`pymeshfix.fill_small_boundaries`)
 
-Hi3DGen の出力は **watertight にならない**。実測（2026-09-01・検体 `i2i_00038_.png`）で
-境界辺 198 本の正体を調べると、**4 本のループがすべて z = 39.9mm の同一平面**にあり、
-厚みがほぼ 0 の平らな開口だった。高さは 80.0mm（z は -40.1〜39.9）なので、
-**生成ボリュームの天面で切り取られている**（ランダムな割れではない）。
-被写体の切り出しは上流が `size×1.2` で決めており、ランナー側からは変えられない。
+Hi3DGen output is **never watertight**. Measuring the 198 boundary edges on the
+sample `i2i_00038_.png` (2026-09-01) showed **four loops all lying on the same
+plane at z = 39.9 mm**, a flat opening of near-zero thickness. The model is
+80.0 mm tall (z from -40.1 to 39.9), so it is **clipped at the top of the
+generation volume** rather than randomly torn. Upstream frames the subject at
+`size x 1.2`, which a runner cannot change from outside.
 
-そこで **TRELLIS 上流が使っているのと同じ `pymeshfix` の同じ呼び出し**で塞ぐ。
-`forge` の `repair_manifold` は既に試して閉じられていない（警告を返した）。
+The opening is therefore closed with **the same `pymeshfix` call upstream
+TRELLIS uses for the same purpose**. `forge`'s `repair_manifold` was tried first
+and could not close it (it returned a warning).
 
-### 2. 外側に浮いた破片を大きさと薄さで落とす
+### 2. Drop free-floating debris by size and thinness
 
-**外側に浮いている破片を、大きさと薄さで落とす。**
-（`.env` の `HI3DGEN_DROP_SMALL_PARTS` / `HI3DGEN_DROP_THIN_PARTS`）
+**Free-floating parts are dropped by size and by thinness**
+(`HI3DGEN_DROP_SMALL_PARTS` and `HI3DGEN_DROP_THIN_PARTS` in `.env`).
 
-実測（2026-09-01・検体 `i2i_00038_.png`）では、本体以外 968 個・33,056 面のうち
-**941 個・30,048 面（90.9%）が本体の外側**に浮いていた。印刷用途では実害になる。
-**落とした量は必ず記録に残す。**
+Measured on the sample `i2i_00038_.png` (2026-09-01): of the 968 components and
+33,056 faces outside the body, **941 components and 30,048 faces (90.9 %) were
+floating outside it**. That is a real defect for printing.
+**Always record how much was dropped.**
 """
 
 from __future__ import annotations
@@ -51,16 +55,18 @@ def fill_small_holes(
     progress: Callable[[str, str], None] | None = None,
     stats: CleanStats | None = None,
 ) -> trimesh.Trimesh:
-    """小さな境界ループを塞ぐ（**上流 TRELLIS と同じ `pymeshfix` の呼び出し**）。
+    """Close small boundary loops (**the same `pymeshfix` call upstream TRELLIS makes**).
 
     Args:
-        mesh: 対象。
-        max_nbe: 塞ぐ境界ループの辺数の上限。0 以下なら何もしない。
-        progress: 段の通知先。
-        stats: 記録の置き場。
+        mesh: The mesh to treat.
+        max_nbe: Maximum number of edges in a boundary loop to fill. 0 or less
+            does nothing.
+        progress: Where to report the stage.
+        stats: Where to record what happened.
 
     Returns:
-        穴を塞いだメッシュ。**失敗したら入力をそのまま返す**（後処理の失敗で生成を落とさない）。
+        The mesh with holes filled. **Returns the input unchanged on failure**,
+        because a post-processing failure must not fail the generation.
     """
     if max_nbe <= 0:
         return mesh
@@ -69,7 +75,7 @@ def fill_small_holes(
         from pymeshfix import _meshfix
 
         if progress is not None:
-            progress("fill_holes", f"小さな穴を塞ぐ（辺 {max_nbe} 本まで）")
+            progress("fill_holes", f"filling small holes (up to {max_nbe} edges)")
         fixer = _meshfix.PyTMesh()
         fixer.load_array(
             np.asarray(mesh.vertices, dtype=np.float64),
@@ -78,8 +84,8 @@ def fill_small_holes(
         fixer.fill_small_boundaries(nbe=max_nbe, refine=True)
         vertices, faces = fixer.return_arrays()
         mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
-    except Exception as exc:  # noqa: BLE001 - 後処理の失敗で生成を落とさない
-        message = f"穴埋めに失敗した（メッシュはそのまま返す）: {type(exc).__name__}: {exc}"
+    except Exception as exc:  # noqa: BLE001 - never fail generation over post-processing
+        message = f"hole filling failed (mesh returned unchanged): {type(exc).__name__}: {exc}"
         print(f"[postprocess] {message}", file=sys.stderr)
         if stats is not None:
             stats.warnings.append(message)
@@ -91,7 +97,7 @@ def fill_small_holes(
 
 @dataclass
 class CleanStats:
-    """後処理で何がどれだけ変わったかの記録。**黙って消さないための数字。**"""
+    """What post-processing changed, and by how much. **Numbers so nothing vanishes silently.**"""
 
     faces_before: int = 0
     faces_after: int = 0
@@ -103,7 +109,7 @@ class CleanStats:
     warnings: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
-        """`metrics` へそのまま載せられる形。"""
+        """The shape that goes straight into `metrics`."""
         return {
             "faces_before": self.faces_before,
             "faces_after": self.faces_after,
@@ -123,31 +129,36 @@ def drop_small_parts(
     progress: Callable[[str, str], None] | None = None,
     stats: CleanStats | None = None,
 ) -> trimesh.Trimesh:
-    """**外側に浮いた破片を「小ささ」と「薄さ」で落とす**（上流に無い、こちらの追加）。
+    """**Drop free-floating debris by size and thinness** (added on top of upstream).
 
-    判定は成分の外接箱（軸平行）と全体の最長辺の比で、2 つの条件の**両方**を
-    満たす成分だけ残す：
+    Components are judged by their axis-aligned bounding box against the model's
+    longest side, and only components passing **both** tests are kept:
 
-    1. **最長辺が `min_ratio` 以上**（小さな破片を落とす）。面数ではなく空間の大きさで
-       見るのは、細かく分割された小片と、面数が少ないだけの正当な部品を分けるため
-    2. **最短辺が `min_thick_ratio` 以上**（薄片を落とす）。表面から約 1% 浮いて
-       平行に張り付く紙のような薄片は、**長さが 11〜29% あるので 1 だけでは
-       素通りする**（描画では表面の黒い斑点や板状の突起に見える）
+    1. **Longest extent at least `min_ratio`** (drops small debris). Spatial size
+       rather than face count separates finely tessellated crumbs from genuine
+       parts that merely have few faces.
+    2. **Shortest extent at least `min_thick_ratio`** (drops flakes). Paper-thin
+       flakes hovering about 1 % off the surface and lying parallel to it are
+       **11-29 % long, so test 1 alone lets them straight through** (they render
+       as dark speckles and tabs on the surface).
 
-    実測（検体 `i2i_00038_.png`・2026-09-02）：残っていた薄片は**厚み 0.1〜1.4%**、
-    正当な部品（腕・パネル）は**厚み 11.8% 以上**で、2% にすると桁の余裕で分離できた。
-    斜めの薄片は軸平行の外接箱では厚めに出るが、実測の薄片はすべて表面に平行＝
-    ほぼ軸平行で問題にならなかった。
+    Measured on the sample `i2i_00038_.png` (2026-09-02): the remaining flakes
+    were **0.1-1.4 % thick** and genuine parts (arms, panels) **11.8 % or more**,
+    so 2 % separates them with an order of magnitude to spare. A tilted flake
+    would measure thicker in an axis-aligned box, but every flake measured lay
+    parallel to the surface and close to axis-aligned, so it did not matter.
 
     Args:
-        mesh: 対象。
-        min_ratio: 残す最小の大きさ（全体の最長辺に対する比）。0 以下なら判定しない。
-        min_thick_ratio: 残す最小の厚み（同）。0 以下なら判定しない。
-        progress: 段の通知先。
-        stats: 記録の置き場。
+        mesh: The mesh to treat.
+        min_ratio: Minimum size to keep, relative to the model's longest side.
+            0 or less skips the test.
+        min_thick_ratio: Minimum thickness to keep, on the same scale. 0 or less
+            skips the test.
+        progress: Where to report the stage.
+        stats: Where to record what happened.
 
     Returns:
-        破片を除いたメッシュ。**最大の成分だけは必ず残す。**
+        The mesh without the debris. **The largest component is always kept.**
     """
     if min_ratio <= 0 and min_thick_ratio <= 0:
         return mesh
@@ -168,7 +179,7 @@ def drop_small_parts(
     if min_thick_ratio > 0:
         thicks = np.array([float(np.min(p.bounding_box.extents)) for p in parts])
         keep &= thicks / whole >= min_thick_ratio
-    keep[int(np.argmax(face_counts))] = True  # 最大の成分は必ず残す
+    keep[int(np.argmax(face_counts))] = True  # always keep the largest component
 
     if stats is not None:
         stats.parts_after = int(keep.sum())
@@ -177,7 +188,8 @@ def drop_small_parts(
     if progress is not None:
         progress(
             "drop_parts",
-            f"浮いた破片を落とす（{int((~keep).sum())} 個 / {int(face_counts[~keep].sum())} 面）",
+            f"dropping free-floating debris "
+            f"({int((~keep).sum())} parts / {int(face_counts[~keep].sum())} faces)",
         )
     if not (~keep).any():
         return mesh
@@ -188,10 +200,10 @@ def clean(
     mesh: trimesh.Trimesh,
     progress: Callable[[str, str], None] | None = None,
 ) -> tuple[trimesh.Trimesh, CleanStats]:
-    """後処理を掛ける。
+    """Apply post-processing.
 
     Returns:
-        `(後処理後のメッシュ, 記録)`。
+        `(post-processed mesh, record)`.
     """
     stats = CleanStats(faces_before=len(mesh.faces))
     mesh = fill_small_holes(mesh, config.FILL_HOLES_MAX_NBE, progress, stats)

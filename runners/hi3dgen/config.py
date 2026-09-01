@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
-"""Hi3DGen ランナーの設定（`.env` から読み込む）。
+"""Configuration for the Hi3DGen runner, read from `.env`.
 
-**このランナーは自分の中で閉じている。** hearth の設定を参照しないので、
-`hi3dgen-strix-halo` として独立リポジトリへ出しても、そのまま動く。
+**This runner is self-contained.** It never reads hearth's configuration, so it
+works unchanged as the standalone `hi3dgen-strix-halo` repository.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# runners/hi3dgen/config.py -> リポジトリのルート。
+# runners/hi3dgen/config.py -> the repository root.
 REPO_ROOT: Path = Path(__file__).resolve().parent.parent.parent
 load_dotenv(REPO_ROOT / ".env")
 
@@ -39,63 +39,74 @@ def _bool(key: str, default: bool) -> bool:
     return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-# 上流の clone（**フォークしない**）。
+# The upstream clone (**never a fork**).
 HI3DGEN_REPO: Path = Path(_str("HI3DGEN_REPO"))
-# 3D パイプラインの重み（`pipeline.json` があるディレクトリ）。
+# Weights for the 3D pipeline (the directory holding `pipeline.json`).
 HI3DGEN_WEIGHTS_DIR: Path = Path(_str("HI3DGEN_WEIGHTS_DIR"))
-# 背景除去（BiRefNet）。**ベンダーコードは `weights/BiRefNet` を相対パスで開くので、
-# ランナー側で読んで `birefnet_model` に差す。**
+# Background removal (BiRefNet). **Upstream opens `weights/BiRefNet` by relative
+# path, so the runner loads it and assigns it to `birefnet_model` instead.**
 HI3DGEN_BIREFNET_DIR: Path = Path(_str("HI3DGEN_BIREFNET_DIR"))
-# 法線推定（StableNormal）。torch.hub の repo と重みの版、および取得先。
+# Normal estimation (StableNormal): the torch.hub repository, the weight
+# version, and where to cache it.
 HI3DGEN_NORMAL_HUB: str = _str("HI3DGEN_NORMAL_HUB", "hugoycj/StableNormal")
 HI3DGEN_NORMAL_VERSION: str = _str("HI3DGEN_NORMAL_VERSION", "yoso-normal-v1-8-1")
 HI3DGEN_NORMAL_CACHE_DIR: Path = Path(_str("HI3DGEN_NORMAL_CACHE_DIR"))
 HI3DGEN_NORMAL_RESOLUTION: int = _int("HI3DGEN_NORMAL_RESOLUTION", 768)
 
-# 上流のデモの既定値（`app.py`）。**疎な段は 6 歩しか回さない**のが Hi3DGen の特徴。
+# Defaults from the upstream demo (`app.py`). **Only 6 steps on the sparse
+# stage** is what distinguishes Hi3DGen.
 SS_STEPS: int = _int("HI3DGEN_SS_STEPS", 50)
 SLAT_STEPS: int = _int("HI3DGEN_SLAT_STEPS", 6)
 SS_GUIDANCE: float = _float("HI3DGEN_SS_GUIDANCE", 3.0)
 SLAT_GUIDANCE: float = _float("HI3DGEN_SLAT_GUIDANCE", 3.0)
 
-# アテンションのヘッド分割。Hunyuan3D 実測で 4 が最良。**根拠なく変えない。**
+# Attention head chunk. Measured best on Hunyuan3D at 4. **Do not change it
+# without evidence.**
 ATTN_HEAD_CHUNK: int = _int("HI3DGEN_ATTN_HEAD_CHUNK", 4)
 
-# **torch を import する前に** TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL を立てるか。
-# 実測（2026-09-01・gfx1151）：立てると flash / mem-efficient が使えるようになり、
-# seq=4096 で 0.135s -> 0.012s、seq=9216 で 1.167s -> 0.059s。出力は一致する。
-# **後から os.environ へ入れても効かない**ので、`__main__.py` の先頭で置く。
+# Whether to set TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL **before torch is
+# imported**. Measured 2026-09-01 on gfx1151: it makes the flash and
+# memory-efficient kernels available, taking seq=4096 from 0.135s to 0.012s and
+# seq=9216 from 1.167s to 0.059s, with identical output. **Setting it afterwards
+# has no effect**, so it goes at the top of `__main__.py`.
 FAST_ATTENTION: bool = _bool("HI3DGEN_FAST_ATTENTION", True)
 
-# 生成中だけ「3D の常夜灯」を点けるか（`gfxlight.py`）。Windows の AMD ドライバは
-# compute だけの負荷ではクロックを上げない（実測：GEMM 単独 600 MHz / 3D 併用 2.35 GHz・
-# 4.3 倍）。点かなくても生成は従来どおり動く。効いたかは metrics.gfx_keepalive に載る。
+# Whether to run the clock keepalive during generation (`gfxlight.py`). The AMD
+# Windows driver does not raise the clock for compute-only work (measured: GEMM
+# alone 600 MHz, with 3D alongside 2.35 GHz, a 4.3x difference). Generation
+# works as before if it fails to start; `metrics.gfx_keepalive` records whether
+# it was alive.
 GFX_KEEPALIVE: bool = _bool("HI3DGEN_GFX_KEEPALIVE", True)
 
 
-# **専用 VRAM の上限（GB）。** gfx1151 の専用 VRAM は 32GB だが、
-# `torch.cuda.mem_get_info` の total は共有メモリ込みの 43.87GB を返す。
-# そのため溢れても例外にならず、**黙って数倍遅くなる**（2026-09-01 に実測で踏んだ）。
-# ここを torch にも伝えて、超えたら OOM で**すぐ落ちる**ようにする。
+# **Cap on dedicated VRAM (GB).** gfx1151 has 32 GB of dedicated VRAM, but the
+# total from `torch.cuda.mem_get_info` is 43.87 GB because it counts shared
+# memory. Overflow therefore raises nothing and **silently becomes several times
+# slower** (measured on 2026-09-01). Passing the cap to torch as well turns that
+# into an **immediate OOM**.
 VRAM_LIMIT_GB: float = _float("HI3DGEN_VRAM_LIMIT_GB", 30.0)
 
-# 生存確認を流す間隔（秒）。**黙って長時間走らせない**ためのもの。
+# Heartbeat interval in seconds. It exists so that **nothing runs silently for a
+# long time**.
 HEARTBEAT_SEC: float = _float("HI3DGEN_HEARTBEAT_SEC", 10.0)
 
 
-# --- 後処理 -----------------------------------------------------------------
-# **上流（Stable3DGen）には後処理が無い**ので、可視率による面の除去は行わない。
-# 足すのは「外側に浮いた破片を大きさで落とす」だけ。0 で無効。
-# 実測では 10% で腕と手（15%）は残り、目に見える破片（6.5% 以下）が消えた。
+# --- Post-processing ---------------------------------------------------------
+# **Upstream (Stable3DGen) has no post-processing**, so no visibility-based face
+# removal happens here. The only addition is dropping free-floating debris by
+# size; 0 disables it. Measured: at 10 % the arms and hands (15 %) survive and
+# the visible debris (6.5 % and below) is gone.
 DROP_SMALL_PARTS: float = _float("HI3DGEN_DROP_SMALL_PARTS", 0.10)
 
-# **これも上流に無い追加。** 外接箱の最短辺が全体の最長辺のこの比未満の分離成分
-# （＝紙のような薄片）を落とす。表面から約 1% 浮いた薄片は長さが 11〜29% あるので
-# DROP_SMALL_PARTS だけでは素通りする。実測：薄片は厚み 1.4% 以下・正当な部品は
-# 11.8% 以上（2026-09-02）。0 で無効。
+# **Also not in upstream.** Drop detached components whose bounding-box minimum
+# extent is below this fraction of the model's longest side (paper-thin flakes).
+# Flakes hovering about 1 % off the surface are 11-29 % long, so DROP_SMALL_PARTS
+# alone lets them through. Measured 2026-09-02: flakes are 1.4 % thick or less,
+# genuine parts 11.8 % or more. 0 disables it.
 DROP_THIN_PARTS: float = _float("HI3DGEN_DROP_THIN_PARTS", 0.02)
 
-# 小さな穴を塞ぐときの境界ループの辺数の上限（0 で無効）。
-# Hi3DGen の出力は生成ボリュームの天面で切れていて watertight にならない。
-# 実測では最大のループが 128 頂点だったので、余裕をみて 250 にする。
+# Maximum number of edges in a boundary loop that gets filled (0 disables it).
+# Hi3DGen output is clipped at the top of the generation volume and is therefore
+# never watertight. The largest loop measured had 128 vertices, so 250 leaves
+# room to spare.
 FILL_HOLES_MAX_NBE: int = _int("HI3DGEN_FILL_HOLES_MAX_NBE", 250)

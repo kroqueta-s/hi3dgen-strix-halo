@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: MIT
-"""Hi3DGen（画像 → 法線 → メッシュ）の実体。**GPU を握るのはここだけ。**
+"""Hi3DGen itself (image to normal map to mesh). **Only this module touches the GPU.**
 
-Hi3DGen は TRELLIS の派生で、**画像そのものではなく法線マップを 3D パイプラインへ渡す**
-（normal bridging）。そのため前段が 2 つある：
+Hi3DGen derives from TRELLIS and **feeds the 3D pipeline a normal map rather
+than the image itself** (normal bridging), so two stages come first:
 
-1. **BiRefNet**（背景除去）。**ベンダーコードが `weights/BiRefNet` を相対パスで開く**ので、
-   ここで読み込んで `pipeline.birefnet_model` に差しておく（ベンダーコードは書き換えない）
-2. **StableNormal**（法線推定）。`torch.hub` から取る
+1. **BiRefNet** (background removal). **Upstream opens `weights/BiRefNet` by
+   relative path**, so it is loaded here and assigned to
+   `pipeline.birefnet_model` instead (upstream code is never modified).
+2. **StableNormal** (normal estimation), fetched through `torch.hub`.
 
-gfx1151 / Windows / ROCm での必須の細工は `shims.install()` に閉じ込めてある。
-**根拠は `shims.py` の docstring と `docs/02_port_report.md`。**
+Everything gfx1151 / Windows / ROCm requires is confined to `shims.install()`.
+**The reasoning is in the `shims.py` docstring.**
 """
 
 from __future__ import annotations
@@ -35,27 +36,29 @@ VERSION = "trellis-normal-v0-1"
 _PIPELINE: Any = None
 _NORMAL: Any = None
 _LOAD_SEC: float = 0.0
-# 速いアテンション（AOTriton）が効いているか。**metrics に載せて記録に残す。**
+# Whether fast attention (AOTriton) is in effect. **Recorded in metrics.**
 _FAST_ATTENTION: bool = False
 
 
 class _DeviceWatch:
-    """デバイスの実使用量を追い、**一定間隔で生存を知らせる**監視スレッド。
+    """Watcher thread that tracks device memory and **reports liveness at a fixed interval**.
 
-    以前は使用量のピークを取るだけだった。それだけだと、長い段の途中で
-    「進んでいるのか、止まっているのか」が外から一切分からない。実際に
-    2026-09-01、生成が黙って 12 分以上走るのを何度も待ってしまった。
+    It used to only take a peak reading. That alone leaves no way to tell from
+    outside whether a long stage is progressing or stuck; on 2026-09-01 runs
+    were repeatedly allowed to continue silently for more than 12 minutes.
 
-    見ているのは 3 つ：
+    Three things are watched:
 
-    1. **生存**（`heartbeat`）。既定 10 秒ごとに経過秒と VRAM を流す。
-       呼び出し側はこれが止まったことで「進んでいない」を判定できる
-    2. **専用 VRAM の超過**（`vram_over`）。**専用 VRAM は 32GB しかない。**
-       `torch.cuda.mem_get_info` の total（43.87GB）は共有メモリ込みの嘘なので、
-       溢れても例外にならず、**黙って数倍遅くなる**。ここを跨いだ瞬間に知らせる
-    3. ピーク（従来どおり `metrics` へ載せる）
+    1. **Liveness** (`heartbeat`): elapsed time and VRAM every 10 seconds by
+       default. The caller can treat a gap as "not progressing".
+    2. **Dedicated VRAM overflow** (`vram_over`). **There are only 32 GB of
+       dedicated VRAM.** The total reported by `torch.cuda.mem_get_info`
+       (43.87 GB) is a lie that counts shared memory, so spilling raises nothing
+       and **silently becomes several times slower**. Crossing the line is
+       reported the moment it happens.
+    3. The peak (still reported in `metrics`).
 
-    **このスレッドから `progress` を呼ぶので、呼び出し側の emit は鍵で守ること。**
+    **This thread calls `progress`, so the caller's emit must be lock-protected.**
     """
 
     def __init__(
@@ -93,15 +96,15 @@ class _DeviceWatch:
                 self.exceeded = True
                 self._say(
                     "vram_over",
-                    f"**専用 VRAM を超えた**（{used:.2f}GB > {self.limit_gb:.2f}GB）。"
-                    "共有メモリへ溢れているので、このまま待っても遅いだけ",
+                    f"**dedicated VRAM exceeded** ({used:.2f}GB > {self.limit_gb:.2f}GB). "
+                    "It is spilling into shared memory, so waiting only means slower",
                 )
             if now - last_beat >= self.heartbeat_sec:
                 last_beat = now
                 self._say(
                     "heartbeat",
-                    f"{self.stage or '実行中'} 経過 {now - started:.0f}s / "
-                    f"VRAM {used:.2f}GB（ピーク {self.peak_used_gb:.2f}GB）",
+                    f"{self.stage or 'running'} {now - started:.0f}s elapsed / "
+                    f"VRAM {used:.2f}GB (peak {self.peak_used_gb:.2f}GB)",
                 )
             self._stop.wait(self.interval)
 
@@ -115,18 +118,19 @@ class _DeviceWatch:
 
 
 def apply_vram_limit() -> float:
-    """**専用 VRAM を超えたら黙って遅くなるのではなく、その場で落ちる**ようにする。
+    """Make exceeding dedicated VRAM **fail immediately instead of silently slowing down**.
 
-    `torch.cuda.mem_get_info` の総容量は共有メモリ込み（gfx1151 で 43.87GB）で、
-    専用 VRAM の 32GB を超えても例外にならない。超えた分はホスト側のメモリへ落ちるので、
-    **例外も警告も出ないまま数倍遅くなる**（2026-09-01、疎畳み込みで実測。最終的には
-    42.02GB まで確保して `torch.OutOfMemoryError` に至った）。
+    The total from `torch.cuda.mem_get_info` includes shared memory (43.87 GB on
+    gfx1151), so passing the 32 GB of dedicated VRAM raises nothing. The excess
+    lands in host memory and **becomes several times slower with no exception and
+    no warning** (measured 2026-09-01 in sparse convolution, which eventually
+    reached 42.02 GB and a `torch.OutOfMemoryError`).
 
-    そこで割り当ての上限を総容量に対する割合で torch へ伝える。上限を超える確保は
-    `torch.OutOfMemoryError` になるので、**待たされずに気付ける。**
+    Passing an allocation cap to torch as a fraction of the total makes any
+    allocation beyond it a `torch.OutOfMemoryError`, so **it surfaces at once**.
 
     Returns:
-        実際に設定した上限（GB）。設定できなければ 0.0。
+        The cap actually applied, in GB, or 0.0 if none could be applied.
     """
     limit = float(config.VRAM_LIMIT_GB)
     if limit <= 0 or not torch.cuda.is_available():
@@ -139,9 +143,10 @@ def apply_vram_limit() -> float:
 
 
 def device_memory_gb() -> tuple[float, float]:
-    """デバイスの (使用中, 合計) を GB で返す。
+    """Return device memory as (used, total) in GB.
 
-    **`total` は共有メモリ込みの値で、専用 VRAM の 32GB とは一致しない。**
+    **`total` includes shared memory and does not match the 32 GB of dedicated
+    VRAM.**
     """
     if not torch.cuda.is_available():
         return 0.0, 0.0
@@ -150,9 +155,10 @@ def device_memory_gb() -> tuple[float, float]:
 
 
 def _prepare_environment() -> None:
-    """`hi3dgen` を import する**前に**、環境変数とシムを整える。
+    """Set environment variables and install the shims **before** importing `hi3dgen`.
 
-    上流は import 時に環境変数を読んで分岐するので、**後から設定しても効かない。**
+    Upstream branches on environment variables at import time, so **setting them
+    afterwards has no effect.**
     """
     os.environ.setdefault("ATTN_BACKEND", "sdpa")
     os.environ.setdefault("SPARSE_BACKEND", "spconv")
@@ -168,41 +174,42 @@ def _prepare_environment() -> None:
 
 
 def load_pipeline(progress: Callable[[str, str], None] | None = None) -> tuple[Any, Any]:
-    """3D パイプライン・BiRefNet・StableNormal をまとめて読み込む。
+    """Load the 3D pipeline, BiRefNet and StableNormal together.
 
-    **段ごとに時間を知らせる。** 切替が遅いときに「どこで待っているか」が
-    分からないと手が打てない（2026-09-01 に実際に困った）。
+    **Timing is reported per stage.** When switching is slow there is nothing to
+    act on without knowing where the time went (a real problem on 2026-09-01).
     """
     global _PIPELINE, _NORMAL, _LOAD_SEC
     if _PIPELINE is not None and _NORMAL is not None:
         return _PIPELINE, _NORMAL
 
     if not config.HI3DGEN_REPO.is_dir():
-        raise FileNotFoundError(f"Stable3DGen の clone が無い: {config.HI3DGEN_REPO}")
+        raise FileNotFoundError(f"no Stable3DGen clone at: {config.HI3DGEN_REPO}")
     if not (config.HI3DGEN_WEIGHTS_DIR / "pipeline.json").is_file():
-        raise FileNotFoundError(f"重みが無い: {config.HI3DGEN_WEIGHTS_DIR}/pipeline.json")
+        raise FileNotFoundError(f"weights not found: {config.HI3DGEN_WEIGHTS_DIR}/pipeline.json")
     if not config.HI3DGEN_BIREFNET_DIR.is_dir():
-        raise FileNotFoundError(f"BiRefNet の重みが無い: {config.HI3DGEN_BIREFNET_DIR}")
+        raise FileNotFoundError(f"BiRefNet weights not found: {config.HI3DGEN_BIREFNET_DIR}")
 
     def _say(stage: str, message: str) -> None:
         if progress is not None:
             progress(stage, message)
 
-    _say("import", "hi3dgen を import する（シムを差し込んでから）")
+    _say("import", "importing hi3dgen (after installing the shims)")
     _prepare_environment()
     limit = apply_vram_limit()
-    _say("vram_limit", f"専用 VRAM の上限を {limit:.1f}GB に設定した（超えたら即 OOM で落ちる）")
+    _say("vram_limit", f"dedicated VRAM capped at {limit:.1f}GB (exceeding it fails as OOM)")
     from hi3dgen.pipelines import Hi3DGenPipeline
     from transformers import AutoModelForImageSegmentation
 
     started = time.perf_counter()
-    _say("weights", "3D パイプラインの重みを読み込む")
+    _say("weights", "loading the 3D pipeline weights")
     pipeline = Hi3DGenPipeline.from_pretrained(str(config.HI3DGEN_WEIGHTS_DIR))
-    _say("to_gpu", "GPU へ載せる")
+    _say("to_gpu", "moving to the GPU")
     pipeline.cuda()
 
-    # **ベンダーコードの `_lazy_load_birefnet` は `weights/BiRefNet` を相対パスで開く。**
-    # 先に差しておけば呼ばれないので、ベンダーコードを書き換えずに済む。
+    # **Upstream's `_lazy_load_birefnet` opens `weights/BiRefNet` by relative
+    # path.** Assigning the model first means it is never called, so upstream
+    # code needs no modification.
     pipeline.birefnet_model = (
         AutoModelForImageSegmentation.from_pretrained(
             str(config.HI3DGEN_BIREFNET_DIR), trust_remote_code=True
@@ -211,7 +218,7 @@ def load_pipeline(progress: Callable[[str, str], None] | None = None) -> tuple[A
         .eval()
     )
 
-    _say("birefnet", "背景除去の重みを読み込んだ")
+    _say("birefnet", "background removal weights loaded")
     normal = torch.hub.load(
         config.HI3DGEN_NORMAL_HUB,
         "StableNormal_turbo",
@@ -221,16 +228,16 @@ def load_pipeline(progress: Callable[[str, str], None] | None = None) -> tuple[A
     )
 
     _LOAD_SEC = time.perf_counter() - started
-    _say("loaded", f"読み込み終わり（{_LOAD_SEC:.1f}s）")
+    _say("loaded", f"loading finished ({_LOAD_SEC:.1f}s)")
     _PIPELINE, _NORMAL = pipeline, normal
     return _PIPELINE, _NORMAL
 
 
 def unload_pipeline() -> bool:
-    """重みを解放して VRAM を返す。
+    """Release the weights and give the VRAM back.
 
     Returns:
-        実際に解放したか（読み込んでいなければ False）。
+        Whether anything was actually released (False if nothing was loaded).
     """
     global _PIPELINE, _NORMAL, _LOAD_SEC
     if _PIPELINE is None and _NORMAL is None:
@@ -247,7 +254,7 @@ def unload_pipeline() -> bool:
 
 @dataclass
 class MeshResult:
-    """生成の結果と実測。"""
+    """The generated mesh and its measurements."""
 
     mesh: trimesh.Trimesh
     foreground: Image.Image
@@ -280,19 +287,23 @@ def generate_mesh(
     seed: int = 0,
     progress: Callable[[str, str], None] | None = None,
 ) -> MeshResult:
-    """画像 1 枚からメッシュを生成する。
+    """Generate a mesh from one image.
 
-    **前処理（背景除去）と法線推定はこのランナーの責任**（契約 §4）。
-    **座標系は上流のまま（Z-up）で返す。** 実寸化はしない（下流の `forge` の仕事）。
+    **Preprocessing (background removal) and normal estimation are this runner's
+    job.** **The coordinate system is returned as upstream leaves it (Z-up)** and
+    nothing is scaled to real-world size, which is downstream work (`forge`).
 
-    上流の `pipeline.run()` と**同じ手順を自分で踏む**。理由は 2 つ：
+    This **repeats the steps of upstream's `pipeline.run()` explicitly**, for two
+    reasons:
 
-    1. **どの段で時間を使っているかを測るため。** 2026-09-01 に「hearth 経由だと
-       生成だけが 4 倍遅い（59.4s -> 229.6s）」という差が出て、`run()` を丸ごと
-       呼んでいると内訳が取れず切り分けられなかった
-    2. **活性ボクセル数を記録するため。** 疎な段の費用はこれでほぼ決まる
+    1. **To measure where the time goes.** On 2026-09-01 generation through
+       hearth was 4x slower than direct (59.4s -> 229.6s), and calling `run()`
+       wholesale gave no breakdown to diagnose it with.
+    2. **To record the active voxel count**, which largely determines the cost of
+       the sparse stages.
 
-    **ベンダーコードは書き換えていない**（公開メソッドを順に呼んでいるだけ）。
+    **Upstream code is not modified**; these are its public methods called in
+    order.
     """
     pipeline, normal_predictor = load_pipeline(progress)
 
@@ -307,16 +318,16 @@ def generate_mesh(
 
     with _DeviceWatch(
         progress=progress,
-        stage="生成",
+        stage="generation",
         heartbeat_sec=config.HEARTBEAT_SEC,
         limit_gb=config.VRAM_LIMIT_GB,
     ) as sampler:
-        _say("rembg", "背景を除去する（BiRefNet）")
+        _say("rembg", "removing the background (BiRefNet)")
         started = time.perf_counter()
         foreground = pipeline.preprocess_image(image, resolution=1024)
         preprocess_sec = time.perf_counter() - started
 
-        _say("normal", "法線を推定する（StableNormal）")
+        _say("normal", "estimating normals (StableNormal)")
         started = time.perf_counter()
         normal_image = normal_predictor(
             foreground,
@@ -326,20 +337,21 @@ def generate_mesh(
         )
         normal_sec = time.perf_counter() - started
 
-        # **`torch.no_grad()` を外さない。** 上流の `run()` にはデコレータで付いているが、
-        # `sample_sparse_structure` などの個別のメソッドには付いていない。段に分けて測ると
-        # ここが抜け、**自動微分のグラフを溜め込んで VRAM を食い尽くす**
-        # （2026-09-01、復号の段で 29.66GB まで確保して OOM。
-        #   上限を切っていたので 100 秒で気付けた）。
+        # **Do not drop `torch.no_grad()`.** Upstream's `run()` carries it as a
+        # decorator, but the individual methods such as `sample_sparse_structure`
+        # do not. Splitting into measured stages loses it and **accumulates an
+        # autograd graph that eats all the VRAM** (measured 2026-09-01: 29.66 GB
+        # at the decode stage, then OOM -- caught within 100 seconds thanks to
+        # the cap).
         with torch.no_grad():
             started = time.perf_counter()
-            _say("cond", "画像を条件ベクトルにする")
+            _say("cond", "encoding the image into a conditioning vector")
             cond = pipeline.get_cond([normal_image])
             cond_sec = time.perf_counter() - started
 
             torch.manual_seed(int(seed))
 
-            _say("structure", f"疎構造をサンプルする（steps={ss}）")
+            _say("structure", f"sampling the sparse structure (steps={ss})")
             step_started = time.perf_counter()
             coords = pipeline.sample_sparse_structure(
                 cond, 1, {"steps": ss, "cfg_strength": ss_cfg}
@@ -347,14 +359,14 @@ def generate_mesh(
             structure_sec = time.perf_counter() - step_started
             n_voxels = int(coords.shape[0])
 
-            _say("slat", f"潜在をサンプルする（steps={slat} / 活性ボクセル {n_voxels}）")
+            _say("slat", f"sampling the latent (steps={slat} / {n_voxels} active voxels)")
             step_started = time.perf_counter()
             slat_latent = pipeline.sample_slat(
                 cond, coords, {"steps": slat, "cfg_strength": slat_cfg}
             )
             slat_sec = time.perf_counter() - step_started
 
-            _say("decode", "メッシュへ復号する")
+            _say("decode", "decoding to a mesh")
             step_started = time.perf_counter()
             outputs = pipeline.decode_slat(slat_latent, ["mesh"])
             decode_sec = time.perf_counter() - step_started
@@ -362,14 +374,15 @@ def generate_mesh(
 
     extracted = outputs["mesh"][0]
     if not bool(getattr(extracted, "success", True)):
-        raise RuntimeError("メッシュが空だった（前景が取れていない可能性がある）")
+        raise RuntimeError("the mesh came back empty (the foreground may not have been extracted)")
 
     mesh = trimesh.Trimesh(
         vertices=extracted.vertices.detach().float().cpu().numpy(),
         faces=extracted.faces.detach().cpu().numpy(),
         process=False,
     )
-    # **後処理は上流の手法に倣う。** 詳細と、上流に無い 1 点は postprocess.py の docstring。
+    # **Post-processing follows upstream.** The details, and the two additions
+    # upstream lacks, are in the postprocess.py docstring.
     mesh, clean_stats = postprocess.clean(mesh, progress)
     return MeshResult(
         mesh=mesh,

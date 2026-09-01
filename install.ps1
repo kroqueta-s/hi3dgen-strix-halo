@@ -17,7 +17,7 @@
 
 .EXAMPLE
     .\install.ps1
-    .\install.ps1 -Root D:\models\trellis
+    .\install.ps1 -Root D:\models\hi3dgen
 #>
 [CmdletBinding()]
 param(
@@ -93,10 +93,13 @@ if (-not (Test-Path $envPath)) {
 # 7. Verify the shims before trusting any mesh --------------------------------
 Write-Host "==> Verifying the shims (exact agreement with dense reference)"
 & $py (Join-Path $repo "tests\test_shims.py")
-& $py (Join-Path $repo "tests\test_raster.py")
+& $py (Join-Path $repo "tests\test_drop_parts.py")
 
 Write-Host ""
-Write-Host "Done. Point hearth at this checkout:"
+Write-Host "Done. Generate a first mesh with:"
+Write-Host "  $py $repo\tools\run_single.py --image $repo\assets\sample.png --out $Root\out"
+Write-Host ""
+Write-Host "Or point hearth at this checkout:"
 Write-Host "  HEARTH_RUNNER_HI3DGEN_PYTHON=$py"
 Write-Host "  HEARTH_RUNNER_HI3DGEN_MODULE=runners.hi3dgen"
 Write-Host "  HEARTH_RUNNER_HI3DGEN_CWD=$repo"

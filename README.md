@@ -1,5 +1,7 @@
 # hi3dgen-strix-halo
 
+[![test](https://github.com/kroqueta-s/hi3dgen-strix-halo/actions/workflows/test.yml/badge.svg)](https://github.com/kroqueta-s/hi3dgen-strix-halo/actions/workflows/test.yml)
+
 **[Hi3DGen / Stable3DGen](https://github.com/Stable-X/Stable3DGen) image-to-mesh
 on AMD Strix Halo (gfx1151), Windows, ROCm — with no CUDA-only package
 installed.**
@@ -9,8 +11,9 @@ neither of which exists for Windows + ROCm. This repository supplies pure-torch
 replacements that are injected at launch time, so **upstream code is cloned and
 run unmodified**.
 
-This is a runner for [hearth](https://github.com/kroqueta-s/hearth): it speaks
-one JSON object per line over stdin/stdout. It also runs standalone.
+The runner speaks one JSON object per line over stdin/stdout, so any
+orchestrator can drive it as a child process. It also runs standalone (see
+Quickstart).
 
 | Input image | Normal map (intermediate) | Mesh (4 views) |
 |---|---|---|
@@ -22,6 +25,7 @@ is the reference specimen for the measurements below.*
 ## Prerequisites
 
 - Windows 11
+- Git
 - An AMD GPU supported by ROCm on Windows (verified on **Strix Halo / gfx1151**,
   Radeon 8060S)
 - AMD Adrenalin driver with **ROCm 7.2.1** support
@@ -40,7 +44,8 @@ cd hi3dgen-strix-halo
 That creates a virtual environment, installs ROCm PyTorch, clones upstream at a
 pinned commit, downloads the weights (5.4 GB across three repositories), writes
 `.env`, and **verifies the replacements against exact references** before you
-trust any mesh.
+trust any mesh. If PowerShell refuses to run the script, use
+`powershell -ExecutionPolicy Bypass -File .\install.ps1`.
 
 ## Quickstart
 

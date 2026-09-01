@@ -22,9 +22,10 @@ Hi3DGen の出力は **watertight にならない**。実測（2026-09-01・検�
 そこで **TRELLIS 上流が使っているのと同じ `pymeshfix` の同じ呼び出し**で塞ぐ。
 `forge` の `repair_manifold` は既に試して閉じられていない（警告を返した）。
 
-### 2. 外側に浮いた破片を大きさで落とす
+### 2. 外側に浮いた破片を大きさと薄さで落とす
 
-**外側に浮いている小さな破片を、大きさで落とす。**（`.env` の `HI3DGEN_DROP_SMALL_PARTS`）
+**外側に浮いている破片を、大きさと薄さで落とす。**
+（`.env` の `HI3DGEN_DROP_SMALL_PARTS` / `HI3DGEN_DROP_THIN_PARTS`）
 
 実測（2026-09-01・検体 `i2i_00038_.png`）では、本体以外 968 個・33,056 面のうち
 **941 個・30,048 面（90.9%）が本体の外側**に浮いていた。印刷用途では実害になる。
@@ -118,24 +119,37 @@ class CleanStats:
 def drop_small_parts(
     mesh: trimesh.Trimesh,
     min_ratio: float,
+    min_thick_ratio: float = 0.0,
     progress: Callable[[str, str], None] | None = None,
     stats: CleanStats | None = None,
 ) -> trimesh.Trimesh:
-    """**外側に浮いた小さな破片を落とす**（上流に無い、こちらの追加）。
+    """**外側に浮いた破片を「小ささ」と「薄さ」で落とす**（上流に無い、こちらの追加）。
 
-    判定は「その成分の外接箱の最長辺 ÷ 全体の最長辺」。面数ではなく**空間の大きさ**で
-    見るのは、細かく分割された小片と、面数が少ないだけの正当な部品を分けるため。
+    判定は成分の外接箱（軸平行）と全体の最長辺の比で、2 つの条件の**両方**を
+    満たす成分だけ残す：
+
+    1. **最長辺が `min_ratio` 以上**（小さな破片を落とす）。面数ではなく空間の大きさで
+       見るのは、細かく分割された小片と、面数が少ないだけの正当な部品を分けるため
+    2. **最短辺が `min_thick_ratio` 以上**（薄片を落とす）。表面から約 1% 浮いて
+       平行に張り付く紙のような薄片は、**長さが 11〜29% あるので 1 だけでは
+       素通りする**（描画では表面の黒い斑点や板状の突起に見える）
+
+    実測（検体 `i2i_00038_.png`・2026-09-02）：残っていた薄片は**厚み 0.1〜1.4%**、
+    正当な部品（腕・パネル）は**厚み 11.8% 以上**で、2% にすると桁の余裕で分離できた。
+    斜めの薄片は軸平行の外接箱では厚めに出るが、実測の薄片はすべて表面に平行＝
+    ほぼ軸平行で問題にならなかった。
 
     Args:
         mesh: 対象。
-        min_ratio: 残す最小の大きさ（全体の最長辺に対する比）。0 以下なら何もしない。
+        min_ratio: 残す最小の大きさ（全体の最長辺に対する比）。0 以下なら判定しない。
+        min_thick_ratio: 残す最小の厚み（同）。0 以下なら判定しない。
         progress: 段の通知先。
         stats: 記録の置き場。
 
     Returns:
         破片を除いたメッシュ。**最大の成分だけは必ず残す。**
     """
-    if min_ratio <= 0:
+    if min_ratio <= 0 and min_thick_ratio <= 0:
         return mesh
     parts = mesh.split(only_watertight=False)
     if stats is not None:
@@ -145,10 +159,15 @@ def drop_small_parts(
             stats.parts_after = len(parts)
         return mesh
 
-    whole = float(np.max(mesh.bounding_box.extents))
-    sizes = np.array([float(np.max(p.bounding_box.extents)) for p in parts])
+    whole = max(float(np.max(mesh.bounding_box.extents)), 1e-12)
     face_counts = np.array([len(p.faces) for p in parts])
-    keep = sizes / max(whole, 1e-12) >= min_ratio
+    keep = np.ones(len(parts), dtype=bool)
+    if min_ratio > 0:
+        sizes = np.array([float(np.max(p.bounding_box.extents)) for p in parts])
+        keep &= sizes / whole >= min_ratio
+    if min_thick_ratio > 0:
+        thicks = np.array([float(np.min(p.bounding_box.extents)) for p in parts])
+        keep &= thicks / whole >= min_thick_ratio
     keep[int(np.argmax(face_counts))] = True  # 最大の成分は必ず残す
 
     if stats is not None:
@@ -176,6 +195,6 @@ def clean(
     """
     stats = CleanStats(faces_before=len(mesh.faces))
     mesh = fill_small_holes(mesh, config.FILL_HOLES_MAX_NBE, progress, stats)
-    mesh = drop_small_parts(mesh, config.DROP_SMALL_PARTS, progress, stats)
+    mesh = drop_small_parts(mesh, config.DROP_SMALL_PARTS, config.DROP_THIN_PARTS, progress, stats)
     stats.faces_after = len(mesh.faces)
     return mesh, stats

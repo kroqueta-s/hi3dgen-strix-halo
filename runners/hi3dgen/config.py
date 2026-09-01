@@ -89,6 +89,12 @@ HEARTBEAT_SEC: float = _float("HI3DGEN_HEARTBEAT_SEC", 10.0)
 # 実測では 10% で腕と手（15%）は残り、目に見える破片（6.5% 以下）が消えた。
 DROP_SMALL_PARTS: float = _float("HI3DGEN_DROP_SMALL_PARTS", 0.10)
 
+# **これも上流に無い追加。** 外接箱の最短辺が全体の最長辺のこの比未満の分離成分
+# （＝紙のような薄片）を落とす。表面から約 1% 浮いた薄片は長さが 11〜29% あるので
+# DROP_SMALL_PARTS だけでは素通りする。実測：薄片は厚み 1.4% 以下・正当な部品は
+# 11.8% 以上（2026-09-02）。0 で無効。
+DROP_THIN_PARTS: float = _float("HI3DGEN_DROP_THIN_PARTS", 0.02)
+
 # 小さな穴を塞ぐときの境界ループの辺数の上限（0 で無効）。
 # Hi3DGen の出力は生成ボリュームの天面で切れていて watertight にならない。
 # 実測では最大のループが 128 頂点だったので、余裕をみて 250 にする。

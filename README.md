@@ -155,8 +155,12 @@ set **before** torch is imported. The runner sets it for you.
   upstream TRELLIS uses for the same purpose.
 - **Free-floating parts.** Measured on one sample, 941 of 968 stray parts were
   outside the body. Upstream has no post-processing at all, so the runner drops
-  parts below 10 % of the model's longest side and records how much it dropped.
-  Set `HI3DGEN_DROP_SMALL_PARTS=0` to disable.
+  detached parts that are **small** (below 10 % of the model's longest side,
+  `HI3DGEN_DROP_SMALL_PARTS`) or **paper-thin** (min bbox extent below 2 %,
+  `HI3DGEN_DROP_THIN_PARTS`) — the thin ones are surface-hugging flakes up to
+  29 % long that pass the size test but render as dark speckles. Measured
+  margins: flakes ≤ 1.4 % thick, real detached parts (arms, panels) ≥ 11.8 %.
+  How much was dropped is always recorded. Set either to 0 to disable.
 - Generation time on this hardware depends on the GPU power state (see the
   600 MHz section above). The keepalive pins the fast case, but do not use
   wall-clock time as a pass/fail signal.

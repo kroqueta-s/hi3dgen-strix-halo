@@ -6,8 +6,8 @@
 #   diffusers 0.31.0    - StableNormal imports diffusers.models.controlnet,
 #                         which was moved in 0.32 and is gone in 0.40.
 #   transformers 4.46.3 - diffusers 0.31 imports FLAX_WEIGHTS_NAME, removed in 5.x.
-diffusers==0.31.0
-transformers==4.46.3
+diffusers==0.31.0     # DO NOT UPGRADE: StableNormal needs diffusers.models.controlnet (moved in 0.32, gone in 0.40)
+transformers==4.46.3  # DO NOT UPGRADE: diffusers 0.31 needs FLAX_WEIGHTS_NAME (removed in transformers 5.x)
 huggingface_hub==0.36.2
 safetensors==0.8.0
 accelerate==1.14.0

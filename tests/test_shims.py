@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
-"""TRELLIS 用シムの検算（**推論を回す前に、ここで数値を合わせる**）。
+"""Hi3DGen 用シムの検算（**推論を回す前に、ここで数値を合わせる**）。
 
-実行は**ランナー側の venv で**（torch が要る）。TRELLIS の venv の python に
-このファイルを渡す。hearth 本体の venv では torch が無いので動かない。
+実行は**この venv で**（torch が要る）。`.venv\\Scripts\\python.exe` に
+このファイルを渡す。GPU が無ければ CPU で走る（CI はそうしている）。
 
 **このテストは「動いた」ではなく「同じ数が出る」を確かめる。**
 
@@ -25,7 +25,7 @@ import torch.nn.functional as F
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-from runners.trellis import shims  # noqa: E402
+from runners.hi3dgen import shims  # noqa: E402
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 

@@ -67,6 +67,11 @@ ATTN_HEAD_CHUNK: int = _int("HI3DGEN_ATTN_HEAD_CHUNK", 4)
 # **後から os.environ へ入れても効かない**ので、`__main__.py` の先頭で置く。
 FAST_ATTENTION: bool = _bool("HI3DGEN_FAST_ATTENTION", True)
 
+# 生成中だけ「3D の常夜灯」を点けるか（`gfxlight.py`）。Windows の AMD ドライバは
+# compute だけの負荷ではクロックを上げない（実測：GEMM 単独 600 MHz / 3D 併用 2.35 GHz・
+# 4.3 倍）。点かなくても生成は従来どおり動く。効いたかは metrics.gfx_keepalive に載る。
+GFX_KEEPALIVE: bool = _bool("HI3DGEN_GFX_KEEPALIVE", True)
+
 
 # **専用 VRAM の上限（GB）。** gfx1151 の専用 VRAM は 32GB だが、
 # `torch.cuda.mem_get_info` の total は共有メモリ込みの 43.87GB を返す。

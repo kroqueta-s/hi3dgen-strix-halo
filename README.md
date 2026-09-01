@@ -12,6 +12,23 @@ run unmodified**.
 This is a runner for [hearth](https://github.com/kroqueta-s/hearth): it speaks
 one JSON object per line over stdin/stdout. It also runs standalone.
 
+| Input image | Normal map (intermediate) | Mesh (4 views) |
+|---|---|---|
+| ![input](assets/sample.png) | ![normal](assets/normal.png) | ![mesh](assets/preview.png) |
+
+*The bundled [`assets/sample.png`](assets/sample.png) (an SDXL-generated robot)
+is the reference specimen for the measurements below.*
+
+## Prerequisites
+
+- Windows 11
+- An AMD GPU supported by ROCm on Windows (verified on **Strix Halo / gfx1151**,
+  Radeon 8060S)
+- AMD Adrenalin driver with **ROCm 7.2.1** support
+- **Python 3.12**
+- ~15 GB of disk (venv + upstream clone + 5.4 GB of weights)
+- ~17 GB of free VRAM at peak
+
 ## Install
 
 ```powershell
@@ -25,8 +42,18 @@ pinned commit, downloads the weights (5.4 GB across three repositories), writes
 `.env`, and **verifies the replacements against exact references** before you
 trust any mesh.
 
-Requirements: Windows, an AMD GPU with ROCm 7.2.1 drivers, Python 3.12, ~15 GB
-of disk, and about 17 GB of VRAM at peak.
+## Quickstart
+
+Generate a mesh from the bundled sample, no JSON required:
+
+```powershell
+.venv\Scripts\python.exe tools\run_single.py --image assets\sample.png --out C:\out
+```
+
+Progress streams to the console; the mesh lands in `C:\out\raw.ply`. To
+reproduce the benchmark below, run the same command **twice and time the second
+run**: the first run includes MIOpen's one-time convolution tuning, which can
+add several minutes and says nothing about steady-state speed.
 
 ## Use
 
@@ -64,23 +91,37 @@ voxels, so it can be checked against a reference without the original library.
 - **`transformers==4.46.3`** — diffusers 0.31 imports `FLAX_WEIGHTS_NAME`,
   removed in transformers 5.
 
+## The GPU idles at 600 MHz unless something renders
+
+The AMD Windows driver does not raise the GPU power state for compute-only
+work: at 99 % compute utilisation the clock sits at **600 MHz** (measured,
+2026-09-01). With any 3D rendering alive alongside, the same workload sustains
+**2.3–2.9 GHz** — a 4.3× difference on GEMM throughput. This also means
+generation time swings wildly depending on whether some UI happens to be
+animating on the desktop.
+
+The runner therefore keeps a **hidden 3D render loop** (`gfxlight.py`, pure
+ctypes, ~0.4 % of the 3D engine) alive during `image_to_mesh`. It is on by
+default (`HI3DGEN_GFX_KEEPALIVE`), costs nothing measurable, and whether it was
+alive is reported in `metrics.gfx_keepalive`.
+
 ## Measurements (gfx1151, Radeon 8060S, 32 GB dedicated VRAM)
 
-One image, `ss_steps = 12`, `slat_steps = 6`, 2026-09-01:
+One image (`assets/sample.png`), upstream defaults `ss_steps = 50`,
+`slat_steps = 6`, clock keepalive on, 2026-09-02:
 
 | Stage | Time |
 |---|--:|
-| Load weights (3D + BiRefNet + StableNormal) | 29 s |
-| Background removal (BiRefNet) | 8 s |
-| Normal estimation (StableNormal) | 5 s |
-| Sparse structure | 46 s |
-| Structured latent | 43 s |
-| Decode to mesh | 10 s |
-| Post-processing | 9 s |
-| **Total** | **161 s** |
+| Load weights (3D + BiRefNet + StableNormal) | 26 s |
+| Background removal (BiRefNet) | 5 s |
+| Normal estimation (StableNormal) | 3 s |
+| Sparse structure | 44 s |
+| Structured latent | 16 s |
+| Decode to mesh | 4 s |
+| **Generate total** | **65 s** |
 
-Peak VRAM 16.2 GB. Output 791,914 faces, watertight, no boundary edges and no
-non-manifold edges after downstream repair.
+Peak VRAM 16.2 GB. Output 830,870 faces after post-processing (hole filling
+plus dropping free-floating debris).
 
 **The first run is much slower**: MIOpen tunes convolution kernels once, which
 took 793 s for normal estimation and 165 s for background removal. The second
@@ -89,6 +130,20 @@ run.
 
 Attention is 10–20× faster when `TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` is
 set **before** torch is imported. The runner sets it for you.
+
+## Troubleshooting
+
+- **Out of VRAM.** The runner caps torch at `HI3DGEN_VRAM_LIMIT_GB` (default
+  30 GB) so that overflow fails fast as `torch.OutOfMemoryError` instead of
+  silently spilling into shared memory and becoming several times slower. If
+  you hit it, close other GPU consumers (check dedicated-VRAM usage in Task
+  Manager's Performance tab) or lower `ss_steps`; peak use for the defaults is
+  about 17 GB.
+- **The first run looks hung.** It is not. MIOpen tunes convolution kernels
+  once per machine (measured: 793 s inside normal estimation, with the GPU
+  busy). Do not kill it; every later run reuses the tuned kernels and the same
+  stage takes seconds. The runner emits a `heartbeat` line every 10 s — as long
+  as those keep coming, it is working.
 
 ## Limits
 
@@ -102,8 +157,9 @@ set **before** torch is imported. The runner sets it for you.
   outside the body. Upstream has no post-processing at all, so the runner drops
   parts below 10 % of the model's longest side and records how much it dropped.
   Set `HI3DGEN_DROP_SMALL_PARTS=0` to disable.
-- Generation time varies on this hardware for identical settings. Do not use it
-  as a pass/fail signal.
+- Generation time on this hardware depends on the GPU power state (see the
+  600 MHz section above). The keepalive pins the fast case, but do not use
+  wall-clock time as a pass/fail signal.
 
 ## License
 

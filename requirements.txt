@@ -1,0 +1,25 @@
+# Pure-python dependencies only. **No CUDA-only package appears here.**
+# spconv and xformers are replaced at launch time by the shims in
+# runners/hi3dgen/shims.py. Upstream code is never patched.
+#
+# Two pins are load-bearing and must not float:
+#   diffusers 0.31.0    - StableNormal imports diffusers.models.controlnet,
+#                         which was moved in 0.32 and is gone in 0.40.
+#   transformers 4.46.3 - diffusers 0.31 imports FLAX_WEIGHTS_NAME, removed in 5.x.
+diffusers==0.31.0
+transformers==4.46.3
+huggingface_hub==0.36.2
+safetensors==0.8.0
+accelerate==1.14.0
+kornia==0.8.3
+timm==1.0.29
+scikit-image==0.26.0
+scipy==1.18.1
+trimesh==5.1.0
+tqdm==4.70.0
+einops==0.8.2
+opencv-python-headless==5.0.0.93
+python-dotenv==1.2.3
+
+# Used to close the flat opening left at the top of the generation volume.
+pymeshfix==0.18.1

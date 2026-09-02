@@ -155,7 +155,13 @@ three runners in this family.
   you hit it, close other GPU consumers (check dedicated-VRAM usage in Task
   Manager's Performance tab) or lower `ss_steps`; peak use for the defaults is
   about 17 GB.
-- **The first run looks hung.** It is not. MIOpen tunes convolution kernels
+- **Generation is ~4x slower when you are away.** If the console display
+  turns off (lid, or the display-off timeout, locked or not), the driver
+  pins the GPU near 600 MHz until it comes back
+  ([details](https://github.com/kroqueta-s/gfx1151-gemm/blob/main/docs/displayoff.md)).
+  Either keep the display from sleeping in Windows power settings, or set
+  `HI3DGEN_DISPLAY_KEEPALIVE`=on to hold it awake during generation
+  (off by default because it keeps the panel lit).- **The first run looks hung.** It is not. MIOpen tunes convolution kernels
   once per machine (measured: 793 s inside normal estimation, with the GPU
   busy). Do not kill it; every later run reuses the tuned kernels and the same
   stage takes seconds. The runner emits a `heartbeat` line every 10 s — as long

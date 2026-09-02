@@ -50,15 +50,17 @@ run used.
 
 ## After the ROCm 10.0 update (torch 2.13.0+rocm10.0.0)
 
-Second-run stage walls, same sample and settings, 2026-09-02. Reference GEMM
-alongside: 30.2 / 30.8 TFLOPS at 2048³ / 4096³.
+Same sample and settings, 2026-09-03. The 10.0 column is the **median of 5
+fresh-process runs**, each bracketed by a 4096³ reference GEMM (all within
+30.6–31.2 TFLOPS) with the GPU clock traced throughout; the 7.2.1 column is
+a single pre-upgrade measurement.
 
-| Stage | 7.2.1 + hipBLASLt | 10.0 |
+| Stage | 7.2.1 + hipBLASLt (single) | 10.0 (median of 5) |
 |---|--:|--:|
-| structure | 44.0 s | **26.3 s** |
-| slat | 10.7 s | **9.4 s** |
-| decode | 3.3 s | 3.3 s |
-| whole generation | 62.9 s | **41.5 s (1.68× over the 7.2.1 baseline)** |
+| structure | 44.0 s | **26.2 s** (26.1–27.0) |
+| slat | 10.7 s | **9.4 s** (8.3–9.5) |
+| decode | 3.3 s | 3.3 s (3.0–3.4) |
+| whole generation | 62.9 s | **39.0 s (1.79× over the 7.2.1 baseline)** |
 
 The attention-bound structure stage nearly halved (newer AOTriton flash
 kernels), and the skinny-GEMM fix is part of the default path. Two platform

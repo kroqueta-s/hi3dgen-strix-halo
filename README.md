@@ -112,18 +112,19 @@ voxels, so it can be checked against a reference without the original library.
 ## Measurements (gfx1151, Radeon 8060S, 32 GB dedicated VRAM)
 
 One image (`assets/sample.png`), upstream defaults `ss_steps = 50`,
-`slat_steps = 6`, torch 2.13.0+rocm10.0.0 (the pins in `install.ps1`),
-2026-09-02:
+`slat_steps = 6`, torch 2.13.0+rocm10.0.0 (the pins in `install.ps1`).
+**Median of 5 runs** (each a fresh process, reference GEMM and GPU clock
+recorded alongside every run), 2026-09-03:
 
-| Stage | Time |
+| Stage | Time (median) |
 |---|--:|
-| Load weights (3D + BiRefNet + StableNormal) | 17 s |
-| Background removal (BiRefNet) | 2 s |
-| Normal estimation (StableNormal) | 1 s |
-| Sparse structure | 26 s |
-| Structured latent | 9 s |
-| Decode to mesh | 3 s |
-| **Generate total** | **42 s** |
+| Load weights (3D + BiRefNet + StableNormal) | 16 s |
+| Background removal (BiRefNet) | 1.6 s |
+| Normal estimation (StableNormal) | 1.0 s |
+| Sparse structure | 26.2 s |
+| Structured latent | 9.4 s |
+| Decode to mesh | 3.3 s |
+| **Generate total** | **39.0 s** (range 38.2–39.3) |
 
 Peak VRAM 16.2 GB. Output 819,096 faces after post-processing (hole filling
 plus dropping free-floating debris). On the previous wheel stack

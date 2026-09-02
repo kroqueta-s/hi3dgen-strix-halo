@@ -12,8 +12,10 @@ replacements that are injected at launch time, so **upstream code is cloned and
 run unmodified**.
 
 The runner speaks one JSON object per line over stdin/stdout, so any
-orchestrator can drive it as a child process. It also runs standalone (see
-Quickstart).
+orchestrator can drive it as a child process —
+[hearth](https://github.com/kroqueta-s/hearth) is one, built to hold this
+runner and its siblings behind a single interface, one loaded at a time. It
+also runs standalone (see Quickstart).
 
 | Input image | Normal map (intermediate) | Mesh (4 views) |
 |---|---|---|
@@ -161,7 +163,8 @@ three runners in this family.
   ([details](https://github.com/kroqueta-s/gfx1151-gemm/blob/main/docs/displayoff.md)).
   Either keep the display from sleeping in Windows power settings, or set
   `HI3DGEN_DISPLAY_KEEPALIVE`=on to hold it awake during generation
-  (off by default because it keeps the panel lit).- **The first run looks hung.** It is not. MIOpen tunes convolution kernels
+  (off by default because it keeps the panel lit).
+- **The first run looks hung.** It is not. MIOpen tunes convolution kernels
   once per machine (measured: 793 s inside normal estimation, with the GPU
   busy). Do not kill it; every later run reuses the tuned kernels and the same
   stage takes seconds. The runner emits a `heartbeat` line every 10 s — as long

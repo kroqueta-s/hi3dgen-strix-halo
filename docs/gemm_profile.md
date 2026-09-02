@@ -33,6 +33,21 @@ The one pathological entry is the sparse-convolution projection: skinny
 (N = 128), and rocBLAS runs it at 1.5 TFLOPS — 2.9 s of the slat stage on its
 own.
 
+## With hipBLASLt (now the default)
+
+Same measurement with `TORCH_BLAS_PREFER_HIPBLASLT=1` and
+`ROCBLAS_USE_HIPBLASLT=1` (what `HI3DGEN_PREFER_HIPBLASLT=on` sets):
+
+| Stage | rocBLAS | hipBLASLt | Speedup |
+|---|--:|--:|--:|
+| structure | 44.1 s | 44.0 s | 1.00× (attention-bound) |
+| slat | 17.1 s | **10.7 s** | **1.60×** |
+| whole generation | 69.7 s | 62.9 s | 1.11× |
+
+The gain is almost entirely the skinny sparse-conv GEMM, which hipBLASLt runs
+at 14 TFLOPS instead of 1.5. `metrics.blas_backend` records which backend a
+run used.
+
 Hi3DGen shares its architecture (and therefore these shapes, modulo the voxel
 count) with TRELLIS; Hunyuan3D looks completely different. The three-pipeline
 comparison, the shape-overlap analysis, and everything about this GPU that

@@ -28,7 +28,8 @@ is the reference specimen for the measurements below.*
 - Git
 - An AMD GPU supported by ROCm on Windows (verified on **Strix Halo / gfx1151**,
   Radeon 8060S)
-- AMD Adrenalin driver with **ROCm 7.2.1** support
+- A current AMD Adrenalin driver (verified with the 2026-08 driver; the
+  **ROCm 10.0 runtime itself ships inside the wheels** that install.ps1 pins)
 - **Python 3.12**
 - ~15 GB of disk (venv + upstream clone + 5.4 GB of weights)
 - ~17 GB of free VRAM at peak
@@ -125,20 +126,23 @@ alive is reported in `metrics.gfx_keepalive`.
 ## Measurements (gfx1151, Radeon 8060S, 32 GB dedicated VRAM)
 
 One image (`assets/sample.png`), upstream defaults `ss_steps = 50`,
-`slat_steps = 6`, clock keepalive on, 2026-09-02:
+`slat_steps = 6`, clock keepalive on, torch 2.13.0+rocm10.0.0 (the pins in
+`install.ps1`), 2026-09-02:
 
 | Stage | Time |
 |---|--:|
-| Load weights (3D + BiRefNet + StableNormal) | 26 s |
-| Background removal (BiRefNet) | 5 s |
-| Normal estimation (StableNormal) | 3 s |
-| Sparse structure | 44 s |
-| Structured latent | 16 s |
-| Decode to mesh | 4 s |
-| **Generate total** | **65 s** |
+| Load weights (3D + BiRefNet + StableNormal) | 17 s |
+| Background removal (BiRefNet) | 2 s |
+| Normal estimation (StableNormal) | 1 s |
+| Sparse structure | 26 s |
+| Structured latent | 9 s |
+| Decode to mesh | 3 s |
+| **Generate total** | **42 s** |
 
-Peak VRAM 16.2 GB. Output 830,870 faces after post-processing (hole filling
-plus dropping free-floating debris).
+Peak VRAM 16.2 GB. Output 819,096 faces after post-processing (hole filling
+plus dropping free-floating debris). On the previous wheel stack
+(torch 2.9.1+rocm7.2.1) the same generation took 65 s; the history and the
+per-operator breakdown are in [`docs/gemm_profile.md`](docs/gemm_profile.md).
 
 **The first run is much slower**: MIOpen tunes convolution kernels once, which
 took 793 s for normal estimation and 165 s for background removal. The second

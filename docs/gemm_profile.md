@@ -48,6 +48,26 @@ The gain is almost entirely the skinny sparse-conv GEMM, which hipBLASLt runs
 at 14 TFLOPS instead of 1.5. `metrics.blas_backend` records which backend a
 run used.
 
+## After the ROCm 10.0 update (torch 2.13.0+rocm10.0.0)
+
+Second-run stage walls, same sample and settings, 2026-09-02. Reference GEMM
+alongside: 30.2 / 30.8 TFLOPS at 2048³ / 4096³.
+
+| Stage | 7.2.1 + hipBLASLt | 10.0 |
+|---|--:|--:|
+| structure | 44.0 s | **26.3 s** |
+| slat | 10.7 s | **9.4 s** |
+| decode | 3.3 s | 3.3 s |
+| whole generation | 62.9 s | **41.5 s (1.68× over the 7.2.1 baseline)** |
+
+The attention-bound structure stage nearly halved (newer AOTriton flash
+kernels), and the skinny-GEMM fix is part of the default path. Two platform
+notes that come with this stack: MIOpen cannot run batch norm (the shims
+probe for it and reroute `F.batch_norm` to torch's native kernel —
+`install_native_batch_norm_if_needed`), and torchvision needs its exact-arch
+device wheel (`install.ps1` handles it). The install traps and the full
+measurement set are in gfx1151-gemm's `docs/rocm10.md`.
+
 Hi3DGen shares its architecture (and therefore these shapes, modulo the voxel
 count) with TRELLIS; Hunyuan3D looks completely different. The three-pipeline
 comparison, the shape-overlap analysis, and everything about this GPU that

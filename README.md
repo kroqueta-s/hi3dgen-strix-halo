@@ -109,7 +109,7 @@ voxels, so it can be checked against a reference without the original library.
 - **`transformers==4.46.3`** — diffusers 0.31 imports `FLAX_WEIGHTS_NAME`,
   removed in transformers 5.
 
-## Measurements (gfx1151, Radeon 8060S, 32 GB dedicated VRAM)
+## Measurements (ASUS ProArt PX13: Ryzen AI MAX+ 395, Radeon 8060S / gfx1151, 32 GB dedicated VRAM, factory power limits)
 
 One image (`assets/sample.png`), upstream defaults `ss_steps = 50`,
 `slat_steps = 6`, torch 2.13.0+rocm10.0.0 (the pins in `install.ps1`).

@@ -99,6 +99,9 @@ can add several minutes and says nothing about steady-state speed.
 
 ```powershell
 .venv\Scripts\python.exe tests\test_shims.py
+.venv\Scripts\python.exe tests\test_steps.py
+# What this runner reports, checked against the contract. No GPU, no weights.
+.venv\Scripts\python.exe tests\test_result_shape.py
 ```
 
 Submanifold convolution is exactly a dense convolution restricted to occupied
@@ -173,6 +176,11 @@ three runners in this family.
 ## Limits
 
 - **No texture.** Upstream produces geometry only.
+- **The mesh comes back Z-up at normalized scale**, and the result says so.
+  **Which way is forward has never been measured**, so it is reported as `null`
+  rather than guessed. A mesh imported on the wrong axis renders perfectly
+  correctly and prints mirrored, so an assumed axis is not a harmless one.
+  Real-world size is downstream work.
 - **The mesh is clipped at the top of the generation volume.** Measured on one
   sample, all four boundary loops lay on a single plane at the top. Upstream
   frames the subject at 1.2× its bounding box and that is not adjustable from

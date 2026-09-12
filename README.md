@@ -132,7 +132,26 @@ recorded alongside every run), 2026-09-02:
 | **Generate total** | **39.0 s** (range 38.2–39.3) |
 
 Peak VRAM 16.2 GB. Output 819,096 faces after post-processing (hole filling
-plus dropping free-floating debris). On the previous wheel stack
+plus dropping free-floating debris).
+
+**Dropping the debris labels the components rather than building them.**
+`trimesh.split()` makes one mesh per component and runs `fill_holes()` on each,
+a repair nobody asked for, and the cost is in the part count rather than the
+face count. Measured 2026-09-12 on synthetic debris, against the same decision
+taken on arrays:
+
+| Parts | Faces | `split()` | Labelled |
+|--:|--:|--:|--:|
+| 1,001 | 81,280 | 0.34 s | **0.03 s** |
+| 5,001 | 401,280 | 2.63 s | **0.23 s** |
+| 20,001 | 1,601,280 | 13.33 s | **0.91 s** |
+
+The parts kept and the faces dropped are identical; a test pins that against
+the version it replaced (`tests/test_drop_parts.py`). What is no longer there
+is `split()`'s hole filling, which could return **more** faces than it was
+given.
+
+On the previous wheel stack
 (torch 2.9.1+rocm7.2.1) the same generation took 65 s; the history and the
 per-operator breakdown are in [`docs/gemm_profile.md`](docs/gemm_profile.md).
 

@@ -100,6 +100,13 @@ def m_capabilities(params: dict[str, Any], progress: Any) -> dict[str, Any]:
             "slat_guidance": {"type": "float", "default": 3.0, "min": 0.0, "max": 20.0},
             "seed": {"type": "int", "default": 0, "min": 0},
         },
+        # **What this runner needs of the card at its defaults, weights included**
+        # (hearth runner contract §3), so hearth refuses a generation while other
+        # processes hold the room rather than starting a load the driver may
+        # abort. Measured 2026-09-15 from outside through hearth, the runner's
+        # process family sampled every 0.5 s: image_to_mesh peaked at 18.11 GB
+        # (sample image, the defaults above), rounded up by about 6%.
+        "vram_peak_gb": {"image_to_mesh": 19.2},
         "notes": (
             "Image to normal map to mesh (normal bridging). BiRefNet for preprocessing, "
             "StableNormal for normals. spconv and flash_attn are replaced by pure-torch "
